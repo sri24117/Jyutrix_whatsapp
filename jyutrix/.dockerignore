@@ -1,0 +1,10 @@
+.env
+.venv
+.git
+__pycache__
+*.pyc
+data
+.pytest_cache
+backups
+node_modules
+tests

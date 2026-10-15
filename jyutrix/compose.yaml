@@ -1,0 +1,87 @@
+name: jyutrix
+x-app-env: &app-env
+  APP_MODE: production
+  DATABASE_URL: postgresql+psycopg://jyutrix:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/jyutrix
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+  PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL}
+  KAPSO_API_KEY: ${KAPSO_API_KEY:?Set KAPSO_API_KEY}
+  KAPSO_WEBHOOK_SECRET: ${KAPSO_WEBHOOK_SECRET:?Set KAPSO_WEBHOOK_SECRET}
+  KAPSO_API_VERSION: ${KAPSO_API_VERSION:-v24.0}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+  REMINDER_TEMPLATE: ${REMINDER_TEMPLATE:-jyutrix_appointment_reminder}
+  TEMPLATE_LANGUAGE: ${TEMPLATE_LANGUAGE:-en_US}
+  VOICE_TOOL_KEY: ${VOICE_TOOL_KEY:-}
+  RETENTION_DAYS: ${RETENTION_DAYS:-90}
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jyutrix
+      POSTGRES_USER: jyutrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U jyutrix -d jyutrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+  app:
+    build: .
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)",
+        ]
+      interval: 20s
+      timeout: 7s
+      retries: 5
+    networks: [private]
+  worker:
+    build: .
+    command: [python, -m, backend.app.worker]
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -m, scripts.worker_health]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    networks: [private]
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [private, public]
+networks:
+  private:
+    internal: false
+  public:
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

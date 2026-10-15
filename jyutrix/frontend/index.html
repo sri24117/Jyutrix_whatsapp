@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jyutrix · Clinic reception</title>
+    <meta
+      name="description"
+      content="Clinic enquiries, appointments and staff conversations in one place."
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login" class="login-wrap">
+      <div class="login-card">
+        <div class="brand-mark">J</div>
+        <div class="eyebrow">JYUTRIX FOR CLINICS</div>
+        <h1>A calmer front desk.</h1>
+        <p>
+          Appointments, conversations and the moments that need your attention.
+        </p>
+        <form id="login-form">
+          <label
+            >Username<input
+              name="username"
+              autocomplete="username"
+              required
+              maxlength="100" /></label
+          ><label
+            >Password<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              maxlength="128" /></label
+          ><button class="primary" type="submit">Sign in <span>→</span></button>
+        </form>
+        <p id="demo-login" class="hint" hidden>
+          Local demo · admin / demo-reception-2026<br />Demo conversations never
+          send real messages.
+        </p>
+        <div id="login-error" role="alert"></div>
+      </div>
+      <div class="login-art">
+        <div class="eyebrow">SPACE TO FOCUS</div>
+        <h2>Every enquiry.<br />A clear next step.</h2>
+        <div class="sample">
+          <span class="dot"></span> Reception, connected.
+          <p>
+            Patient asks → chooses a slot → confirms.<br />Your team stays in
+            control.
+          </p>
+        </div>
+      </div>
+    </section>
+    <div id="workspace" hidden>
+      <aside>
+        <a class="brand" href="/">
+          <span class="brand-mark small">J</span
+          ><span>jyutrix<small>CLINIC RECEPTION</small></span></a
+        >
+        <div class="nav-label">WORKSPACE</div>
+        <nav aria-label="Main navigation">
+          <button data-view="overview" class="active">
+            ◉ <span>Overview</span></button
+          ><button data-view="appointments">▦ <span>Appointments</span></button
+          ><button data-view="inbox">
+            ◌ <span>Conversations</span><b id="attention-count"></b></button
+          ><button data-view="delivery">↗ <span>Message delivery</span></button
+          ><button data-view="settings">⚙ <span>Clinic settings</span></button
+          ><button data-view="demo" id="demo-nav">
+            ▷ <span>Try the demo</span>
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <p id="account"></p>
+          <button id="logout" class="quiet">Sign out →</button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <div id="environment" class="eyebrow">CLINIC WORKSPACE</div>
+            <h1 id="page-title">Overview</h1>
+          </div>
+          <div class="header-controls">
+            <label class="sr-only" for="clinic-select">Clinic</label
+            ><select id="clinic-select"></select
+            ><button id="refresh" class="secondary">Refresh</button>
+          </div>
+        </header>
+        <div id="connection-banner" class="banner" hidden></div>
+        <div id="content"></div>
+        <footer>
+          Jyutrix · Your team stays in control. Medical questions go to clinic
+          staff.
+        </footer>
+      </main>
+    </div>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <dialog id="modal">
+      <div class="dialog-header">
+        <h2 id="modal-title"></h2>
+        <button id="close-modal" class="quiet" aria-label="Close dialog">
+          ✕
+        </button>
+      </div>
+      <div id="modal-body"></div>
+    </dialog>
+  </body>
+</html>
