@@ -136,6 +136,35 @@ class RetryInput(Strict):
     reviewed_provider_logs: bool = False
 
 
+class LeadInput(Strict):
+    name: str = Field(min_length=2, max_length=120)
+    clinic_name: str = Field(min_length=2, max_length=160)
+    city: str = Field(min_length=2, max_length=100)
+    phone: str = Field(pattern=r"^\+?[1-9]\d{7,14}$")
+    email: str | None = Field(default=None, max_length=254)
+    note: str = Field(default="", max_length=1000)
+    consent: bool
+    website: str = Field(default="", max_length=200)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value):
+        if value is not None and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Enter a valid email address")
+        return value
+
+    @field_validator("consent")
+    @classmethod
+    def consent_required(cls, value):
+        if not value:
+            raise ValueError("Consent is required to request a demo")
+        return value
+
+
+class LeadStatusInput(Strict):
+    status: Literal["new", "contacted", "qualified", "won", "closed"]
+
+
 class VoiceRequest(Strict):
     clinic_id: int
     action: Literal["info", "availability", "request"]

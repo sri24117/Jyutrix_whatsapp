@@ -36,6 +36,8 @@ class Settings:
                 raise RuntimeError(
                     "Production requires a unique ADMIN_PASSWORD of at least 16 characters"
                 )
+            if self.admin_password == "demo-reception-2026":
+                raise RuntimeError("Production cannot use the public local-demo password")
             if not self.public_url.startswith("https://"):
                 raise RuntimeError("Production requires an HTTPS PUBLIC_URL")
             if len(self.webhook_secret) < 32 or not self.kapso_key:

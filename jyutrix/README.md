@@ -15,7 +15,9 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open **http://localhost:8000**. Local demo credentials: **admin / demo-reception-2026**. Change them before connecting external messaging. A fictional dental clinic is created only in demo mode.
+Open **http://localhost:8000** for the public landing page, and **http://localhost:8000/app** for the clinic workspace. Local demo credentials: **admin / demo-reception-2026**. These credentials are local-demo only; production explicitly rejects this password. A fictional dental clinic is created only in demo mode.
+
+The landing page includes a demo-request form. Requests are saved in the workspace under **Sales enquiries** (administrator only), where you can track follow-up stages or delete the contact record. Do not submit patient or health information through this form.
 
 The **Try the demo** screen uses separate conversation records and never sends real WhatsApp messages. Send `BOOK`, then `1`, then `YES`. Try `RESCHEDULE`, `CANCEL` then `YES`, `STAFF`, and `STOP`. Use Conversations → Resume automation to release staff control.
 
@@ -38,6 +40,7 @@ cp .env.example .env
 
 ## What is included
 
+- Responsive public marketing site with consent-based demo requests and an administrator-only enquiry follow-up board.
 - Responsive admin, owner and receptionist workspace.
 - Persistent cookie sessions, CSRF protection, password hashing, login throttling and revocation.
 - Clinic isolation on all patient, appointment, job and report APIs.

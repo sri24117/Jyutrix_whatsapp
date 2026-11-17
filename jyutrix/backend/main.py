@@ -9,6 +9,7 @@ import json
 import logging
 import secrets
 import time
+from urllib.parse import urlsplit
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ from .app.database import (
     Delivery,
     Audit,
     Heartbeat,
+    SalesLead,
     engine,
     init_db,
     audit,
@@ -53,6 +55,8 @@ from .app.schemas import (
     PasswordInput,
     RetryInput,
     VoiceRequest,
+    LeadInput,
+    LeadStatusInput,
 )
 from .app.booking import (
     available,
@@ -114,12 +118,17 @@ app = FastAPI(
 @app.middleware("http")
 async def security(request, call_next):
     origin = request.headers.get("origin")
-    if (
-        request.method not in {"GET", "HEAD", "OPTIONS"}
-        and origin
-        and origin != settings.public_url
-    ):
-        return JSONResponse({"detail": "Origin not allowed"}, 403)
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
+        allowed_origin = origin == settings.public_url
+        if settings.mode != "production" and not allowed_origin:
+            host = request.headers.get("host", "")
+            scheme = request.headers.get(
+                "x-forwarded-proto", request.url.scheme
+            ).split(",", 1)[0].strip()
+            parsed_origin = urlsplit(origin)
+            allowed_origin = parsed_origin.netloc == host and parsed_origin.scheme == scheme
+        if not allowed_origin:
+            return JSONResponse({"detail": "Origin not allowed"}, 403)
     # Streamed body cap protects against requests without Content-Length too.
     if request.method in {"POST", "PUT", "PATCH"}:
         try:
@@ -158,8 +167,81 @@ async def integrity_error(request, exc):
 
 
 @app.get("/")
-def index():
+def marketing_site():
+    return FileResponse(ROOT / "frontend/marketing.html")
+
+
+@app.get("/app")
+@app.get("/app/")
+def clinic_workspace():
     return FileResponse(ROOT / "frontend/index.html")
+
+
+@app.post("/api/leads", status_code=201)
+def create_sales_lead(payload: LeadInput, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    limit("sales-lead:" + client_ip, maximum=5, window=3600)
+    # Honeypot submissions receive the normal success response but are not stored.
+    if payload.website.strip():
+        return {"ok": True}
+    with transaction() as db:
+        lead = SalesLead(
+            name=payload.name.strip(),
+            clinic_name=payload.clinic_name.strip(),
+            city=payload.city.strip(),
+            phone=payload.phone,
+            email=payload.email.strip() if payload.email else None,
+            note=payload.note.strip(),
+            consent=True,
+        )
+        db.add(lead)
+        db.flush()
+        audit(db, "public_website", "sales_lead.created", lead.id)
+    return {"ok": True, "message": "Thanks — our team will contact you about the demo."}
+
+
+@app.get("/api/leads")
+def sales_leads(user=Depends(principal)):
+    admin_only(user)
+    with transaction() as db:
+        return [
+            {
+                "id": lead.id,
+                "name": lead.name,
+                "clinic_name": lead.clinic_name,
+                "city": lead.city,
+                "phone": lead.phone,
+                "email": lead.email,
+                "note": lead.note,
+                "status": lead.status,
+                "created": lead.created,
+            }
+            for lead in db.scalars(select(SalesLead).order_by(SalesLead.id.desc()).limit(500))
+        ]
+
+
+@app.patch("/api/leads/{lead_id}")
+def update_sales_lead(lead_id: int, payload: LeadStatusInput, user=Depends(principal)):
+    admin_only(user)
+    with transaction() as db:
+        lead = db.get(SalesLead, lead_id)
+        if not lead:
+            raise HTTPException(404, "Lead not found")
+        lead.status = payload.status
+        audit(db, user["username"], "sales_lead.status_changed", lead.id)
+    return {"ok": True}
+
+
+@app.delete("/api/leads/{lead_id}")
+def delete_sales_lead(lead_id: int, user=Depends(principal)):
+    admin_only(user)
+    with transaction() as db:
+        lead = db.get(SalesLead, lead_id)
+        if not lead:
+            raise HTTPException(404, "Lead not found")
+        audit(db, user["username"], "sales_lead.deleted", lead.id)
+        db.delete(lead)
+    return {"ok": True}
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "frontend"), name="static")

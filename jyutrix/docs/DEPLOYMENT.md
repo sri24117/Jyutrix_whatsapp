@@ -6,6 +6,19 @@ A Linux host with Docker Compose, a DNS A record for your chosen domain, availab
 
 If Coolify already owns ports 80/443, use its proxy for the `app` service and omit the `proxy` service; do not launch a second proxy on those ports. Keep the worker and PostgreSQL services. Give Coolify your Docker Compose source and assign the domain to app port 8000; leave PostgreSQL private. Set all required variables in that deployment.
 
+## Hostinger KVM and jyutrix.cloud
+
+This setup is for a single Ubuntu KVM server. It is a single-node deployment: it does not provide high availability, and a VPS outage interrupts the service until recovered.
+
+1. In Hostinger, point the apex `jyutrix.cloud` A record to the KVM's public IPv4 address. Point `www.jyutrix.cloud` to the same address (A record) or make it a CNAME to the apex. Remove stale conflicting records. Allow inbound TCP 22 (restricted to your admin IP if practical), 80 and 443 in both the Hostinger firewall and the server firewall. Do not open PostgreSQL port 5432.
+2. Install a supported Ubuntu LTS image, apply security updates, and install Docker Engine plus the Docker Compose plugin using Docker's official Ubuntu instructions. Keep SSH key authentication enabled and disable password SSH login after verifying key access.
+3. Put the project on the server, for example at `/opt/jyutrix`. Copy `.env.example` to `.env`, set permissions to `600`, and replace demo values before starting production. Set `SITE_DOMAIN=jyutrix.cloud` and `PUBLIC_URL=https://jyutrix.cloud`. Caddy serves the apex and redirects `www` to the apex.
+4. Generate unique admin and PostgreSQL passwords and provide the Kapso API key and webhook secret. The production app intentionally refuses to start without valid production secrets and PostgreSQL. Do not enable clinic automation merely because the landing page is online.
+5. Run Compose from the project directory using the first-deployment commands below. Caddy obtains HTTPS certificates when DNS is correct and ports 80/443 are reachable. The public marketing page is `/`; the clinic workspace is `/app`. Public demo requests are visible under **Sales enquiries** after an administrator signs in.
+6. Test `https://jyutrix.cloud`, `https://jyutrix.cloud/app`, `/health`, a demo-request submission, admin lead tracking/deletion, and the clinic go-live checklist before sharing the domain publicly.
+
+Keep the KVM patched. Configure off-server encrypted backups and test restoration; a persistent Docker volume on the same VPS is not a backup. The bundled Compose file keeps the database private and only binds the app to loopback behind Caddy.
+
 ## First deployment
 
 1. Extract the source folder on the server, for example `/opt/jyutrix`.
@@ -56,7 +69,7 @@ Do not restore into live `jyutrix` during a test. Check row counts, sessions and
 
 ## Retention and monitoring
 
-Run daily: `docker compose exec -T app python -m scripts.retention`. The default is 90 days for old message/job content and inactive contact anonymization. Confirm the period with each clinic. Provider-held content, audit logs, financial records and backups have separate retention requirements; the task does not promise to delete them everywhere.
+Run daily: `docker compose exec -T app python -m scripts.retention`. The default is 90 days for old message/job content, inactive contact anonymization and unconverted public sales enquiries. Confirm the period with each clinic and update `RETENTION_DAYS` to the approved policy. Provider-held content, audit logs, financial records and backups have separate retention requirements; the task does not promise to delete them everywhere.
 
 Monitor HTTPS `/health`, worker health, failed/uncertain jobs, reminder failures, database backups and disk space. Failed incoming events are retained in the job queue. Inspect logs and fix the cause before retrying. Inbound events are kept in order per clinic while retries are pending.
 

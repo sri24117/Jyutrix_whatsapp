@@ -14,6 +14,7 @@ from backend.app.database import (
     Appointment,
     Audit,
     Clinic,
+    SalesLead,
     audit,
 )
 
@@ -71,6 +72,7 @@ for cid in clinic_ids:
 with transaction() as db:
     db.execute(delete(LoginSession).where(LoginSession.expires < time.time()))
     db.execute(delete(RateBucket).where(RateBucket.reset_at < time.time() - 86400))
+    db.execute(delete(SalesLead).where(SalesLead.created < cutoff))
 print(
     "Retention task complete. Provider-held data must be deleted separately under your provider policy."
 )

@@ -75,6 +75,20 @@ class RateBucket(Base):
     reset_at: Mapped[int] = mapped_column(Integer)
 
 
+class SalesLead(Base):
+    __tablename__ = "sales_leads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    clinic_name: Mapped[str] = mapped_column(String(160))
+    city: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    consent: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(20), default="new", index=True)
+    created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
+
+
 class Thread(Base):
     __tablename__ = "threads"
     __table_args__ = (UniqueConstraint("clinic_id", "contact", "channel"),)
