@@ -8,6 +8,12 @@ SQLAlchemy uses SQLite for local demo/tests and psycopg PostgreSQL for productio
 
 Sessions contain hashed random tokens and persistent expiry; passwords use scrypt with random salt. Cookies are HttpOnly, SameSite=Strict and Secure in production; state-changing staff APIs require a per-session CSRF token. Authentication, role restrictions and tenant checks happen on the backend. Login throttling is database-backed; PostgreSQL advisory locks serialize rate buckets.
 
+## Doctor, service and plan model
+
+Clinics have an active doctor catalog with a schedule per doctor and an active service catalog with a duration and fee per service. Appointment rows carry nullable doctor/service references for legacy compatibility; startup adds missing columns and backfills existing rows to the clinic's first/default doctor and service. PostgreSQL's exclusion constraint groups overlapping appointment ranges by clinic, doctor and demo/live bucket. SQLite uses a doctor-scoped unique start index plus the serialized availability check.
+
+Plan limits are enforced in backend catalog mutations, not just in the UI: Starter/Pilot allows one active doctor and ten active services; Growth allows five doctors and thirty services. Growth schedules 24- and 3-hour reminder jobs when consent and template conditions pass. Growth also includes a consent-based waitlist: it offers a freed slot to one eligible WhatsApp thread at a time, expires after 20 minutes, rechecks booking conflicts at acceptance, and advances on decline/expiry/opt-out. Offers are automated only inside the 24-hour service window; reception must handle out-of-window follow-up under the approved-template process. Optional signed Confirm/Reschedule/Cancel reminder quick replies are implemented behind a separate template-approval flag; live Meta/Kapso behavior remains unverified. Deposits, Pro branch routing and richer conversion analytics are not implemented; see `docs/GROWTH_PLAN.md`.
+
 ## Inbound messages
 
 A per-clinic, HMAC-verified Meta-format webhook verifies number ownership, persists delivery IDs and normalized incoming message jobs, then acknowledges. A separate worker processes incoming jobs in clinic order. The conversation state, incoming message, booking and outgoing reply are committed together. Provider message IDs prevent repeated processing even if delivery keys change. Completed inbound job payloads are cleared.

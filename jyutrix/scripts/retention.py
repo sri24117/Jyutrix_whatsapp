@@ -15,6 +15,7 @@ from backend.app.database import (
     Audit,
     Clinic,
     SalesLead,
+    WaitlistEntry,
     audit,
 )
 
@@ -73,6 +74,7 @@ with transaction() as db:
     db.execute(delete(LoginSession).where(LoginSession.expires < time.time()))
     db.execute(delete(RateBucket).where(RateBucket.reset_at < time.time() - 86400))
     db.execute(delete(SalesLead).where(SalesLead.created < cutoff))
+    db.execute(delete(WaitlistEntry).where(WaitlistEntry.created < cutoff))
 print(
     "Retention task complete. Provider-held data must be deleted separately under your provider policy."
 )

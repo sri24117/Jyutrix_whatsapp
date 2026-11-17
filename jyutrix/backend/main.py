@@ -25,6 +25,9 @@ from .app.database import (
     Thread,
     Job,
     Appointment,
+    Doctor,
+    Service,
+    WaitlistEntry,
     Delivery,
     Audit,
     Heartbeat,
@@ -57,6 +60,8 @@ from .app.schemas import (
     VoiceRequest,
     LeadInput,
     LeadStatusInput,
+    DoctorInput,
+    ServiceInput,
 )
 from .app.booking import (
     available,
@@ -65,9 +70,12 @@ from .app.booking import (
     reschedule,
     cancel_reminders,
     readable,
+    ensure_catalog,
 )
 from .app.receptionist import inbound, takeover, queue_reply, get_thread
 from .app.kapso import verify, normalize_meta
+from .app.entitlements import limits_for, plan_name
+from .app.waitlist import offer_waitlist_for_slot
 
 log = logging.getLogger("jyutrix")
 
@@ -345,6 +353,7 @@ def clinic_dict(c):
             "number_id",
             "enabled",
             "template_approved",
+            "reminder_buttons_approved",
             "plan",
             "monthly_fee",
             "monthly_limit",
@@ -369,6 +378,7 @@ def create_clinic(payload: ClinicInput, user=Depends(principal)):
         c = Clinic(**payload.model_dump())
         db.add(c)
         db.flush()
+        ensure_catalog(db, c)
         audit(db, user["username"], "clinic.created", c.id, c.id)
         return clinic_dict(c)
 
@@ -382,6 +392,8 @@ def update_clinic(clinic_id: int, payload: ClinicInput, user=Depends(principal))
         c = db.get(Clinic, clinic_id)
         if not c:
             raise HTTPException(404, "Clinic not found")
+        previous_plan = plan_name(c.plan)
+        doctors, services = ensure_catalog(db, c)
         values = payload.model_dump()
         if user["role"] != "admin":
             for field in [
@@ -394,6 +406,28 @@ def update_clinic(clinic_id: int, payload: ClinicInput, user=Depends(principal))
                 values.pop(field)
         for key, value in values.items():
             setattr(c, key, value)
+        limits = limits_for(c)
+        active_doctors = db.scalar(
+            select(func.count()).select_from(Doctor).where(
+                Doctor.clinic_id == clinic_id, Doctor.active.is_(True)
+            )
+        )
+        active_services = db.scalar(
+            select(func.count()).select_from(Service).where(
+                Service.clinic_id == clinic_id, Service.active.is_(True)
+            )
+        )
+        if active_doctors > limits["max_doctors"] or active_services > limits["max_services"]:
+            raise HTTPException(409, "Deactivate catalog items above the target plan limits before downgrading")
+        if previous_plan == "Starter":
+            if "schedule" in values and doctors:
+                doctors[0].schedule = values["schedule"]
+            if "doctor" in values and doctors:
+                doctors[0].name = c.doctor
+            if services:
+                services[0].name = (c.services or ["General consultation"])[0][:120]
+                services[0].fee = c.fee
+                services[0].duration = c.schedule.get("duration", services[0].duration)
         if not c.enabled:
             for thread in db.scalars(
                 select(Thread).where(
@@ -454,8 +488,182 @@ def disable_user(user_id: int, user=Depends(principal)):
     return {"ok": True}
 
 
+@app.get("/api/clinics/{clinic_id}/entitlements")
+def clinic_entitlements(clinic_id: int, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    with transaction() as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        ensure_catalog(db, clinic)
+        limits = limits_for(clinic)
+        doctors = db.scalar(
+            select(func.count()).select_from(Doctor).where(
+                Doctor.clinic_id == clinic_id, Doctor.active.is_(True)
+            )
+        )
+        services = db.scalar(
+            select(func.count()).select_from(Service).where(
+                Service.clinic_id == clinic_id, Service.active.is_(True)
+            )
+        )
+        return {
+            "plan": plan_name(clinic.plan),
+            "limits": limits,
+            "usage": {"doctors": doctors, "services": services},
+        }
+
+
+@app.get("/api/doctors")
+def doctors(clinic_id: int, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    with transaction(clinic_id) as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        ensure_catalog(db, clinic)
+        return [
+            {"id": d.id, "name": d.name, "schedule": d.schedule, "active": d.active}
+            for d in db.scalars(
+                select(Doctor).where(Doctor.clinic_id == clinic_id).order_by(Doctor.id)
+            )
+        ]
+
+
+@app.post("/api/clinics/{clinic_id}/doctors")
+def create_doctor(clinic_id: int, payload: DoctorInput, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    if user["role"] == "receptionist":
+        raise HTTPException(403, "Owner access required")
+    with transaction(clinic_id) as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        ensure_catalog(db, clinic)
+        cap = limits_for(clinic)["max_doctors"]
+        count = db.scalar(
+            select(func.count()).select_from(Doctor).where(
+                Doctor.clinic_id == clinic_id, Doctor.active.is_(True)
+            )
+        )
+        if count >= cap:
+            raise HTTPException(403, f"{plan_name(clinic.plan)} supports up to {cap} active doctor(s)")
+        doctor = Doctor(
+            clinic_id=clinic_id,
+            name=payload.name.strip(),
+            schedule=(payload.schedule or Schedule.model_validate(clinic.schedule)).model_dump(),
+            active=payload.active,
+        )
+        db.add(doctor)
+        db.flush()
+        audit(db, user["username"], "doctor.created", doctor.id, clinic_id)
+        return {"id": doctor.id, "name": doctor.name, "schedule": doctor.schedule, "active": doctor.active}
+
+
+@app.put("/api/doctors/{doctor_id}")
+def update_doctor(doctor_id: int, payload: DoctorInput, user=Depends(principal)):
+    with transaction() as db:
+        doctor = db.get(Doctor, doctor_id)
+        if not doctor:
+            raise HTTPException(404, "Doctor not found")
+        clinic_id = doctor.clinic_id
+    check_scope(user, clinic_id)
+    if user["role"] == "receptionist":
+        raise HTTPException(403, "Owner access required")
+    with transaction(clinic_id) as db:
+        doctor = db.get(Doctor, doctor_id)
+        if payload.active and not doctor.active:
+            clinic = db.get(Clinic, clinic_id)
+            count = db.scalar(
+                select(func.count()).select_from(Doctor).where(
+                    Doctor.clinic_id == clinic_id, Doctor.active.is_(True)
+                )
+            )
+            if count >= limits_for(clinic)["max_doctors"]:
+                raise HTTPException(403, "Doctor limit for this plan reached")
+        doctor.name = payload.name.strip()
+        doctor.schedule = (payload.schedule or Schedule.model_validate(db.get(Clinic, clinic_id).schedule)).model_dump()
+        doctor.active = payload.active
+        audit(db, user["username"], "doctor.updated", doctor.id, clinic_id)
+        return {"id": doctor.id, "name": doctor.name, "schedule": doctor.schedule, "active": doctor.active}
+
+
+@app.get("/api/services")
+def services(clinic_id: int, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    with transaction(clinic_id) as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        ensure_catalog(db, clinic)
+        return [
+            {"id": s.id, "name": s.name, "duration": s.duration, "fee": s.fee, "active": s.active}
+            for s in db.scalars(
+                select(Service).where(Service.clinic_id == clinic_id).order_by(Service.id)
+            )
+        ]
+
+
+@app.post("/api/clinics/{clinic_id}/services")
+def create_service(clinic_id: int, payload: ServiceInput, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    if user["role"] == "receptionist":
+        raise HTTPException(403, "Owner access required")
+    with transaction(clinic_id) as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        ensure_catalog(db, clinic)
+        cap = limits_for(clinic)["max_services"]
+        count = db.scalar(
+            select(func.count()).select_from(Service).where(
+                Service.clinic_id == clinic_id, Service.active.is_(True)
+            )
+        )
+        if count >= cap:
+            raise HTTPException(403, f"{plan_name(clinic.plan)} supports up to {cap} active services")
+        service = Service(clinic_id=clinic_id, **payload.model_dump())
+        db.add(service)
+        db.flush()
+        audit(db, user["username"], "service.created", service.id, clinic_id)
+        return {"id": service.id, "name": service.name, "duration": service.duration, "fee": service.fee, "active": service.active}
+
+
+@app.put("/api/services/{service_id}")
+def update_service(service_id: int, payload: ServiceInput, user=Depends(principal)):
+    with transaction() as db:
+        service = db.get(Service, service_id)
+        if not service:
+            raise HTTPException(404, "Service not found")
+        clinic_id = service.clinic_id
+    check_scope(user, clinic_id)
+    if user["role"] == "receptionist":
+        raise HTTPException(403, "Owner access required")
+    with transaction(clinic_id) as db:
+        service = db.get(Service, service_id)
+        if payload.active and not service.active:
+            clinic = db.get(Clinic, clinic_id)
+            count = db.scalar(
+                select(func.count()).select_from(Service).where(
+                    Service.clinic_id == clinic_id, Service.active.is_(True)
+                )
+            )
+            if count >= limits_for(clinic)["max_services"]:
+                raise HTTPException(403, "Service limit for this plan reached")
+        for key, value in payload.model_dump().items():
+            setattr(service, key, value)
+        audit(db, user["username"], "service.updated", service.id, clinic_id)
+        return {"id": service.id, "name": service.name, "duration": service.duration, "fee": service.fee, "active": service.active}
+
+
 @app.get("/api/availability")
-def availability(clinic_id: int, day: str | None = None, user=Depends(principal)):
+def availability(
+    clinic_id: int,
+    day: str | None = None,
+    doctor_id: int | None = None,
+    service_id: int | None = None,
+    user=Depends(principal),
+):
     check_scope(user, clinic_id)
     with transaction(clinic_id) as db:
         c = db.get(Clinic, clinic_id)
@@ -465,17 +673,28 @@ def availability(clinic_id: int, day: str | None = None, user=Depends(principal)
             target = date.fromisoformat(day) if day else None
         except ValueError:
             raise HTTPException(422, "Use YYYY-MM-DD")
+        doctors, services = ensure_catalog(db, c)
+        selected_doctor = db.get(Doctor, doctor_id) if doctor_id else next((d for d in doctors if d.active), None)
+        selected_service = db.get(Service, service_id) if service_id else next((s for s in services if s.active), None)
+        slots = available(
+            db, c, target, doctor_id=doctor_id, service_id=service_id
+        )
         return [
             {
                 "starts": s,
                 "label": readable(c, s),
                 "iso": datetime.fromtimestamp(s, ZoneInfo(c.timezone)).isoformat(),
+                "doctor_id": selected_doctor.id,
+                "doctor": selected_doctor.name,
+                "service_id": selected_service.id,
+                "service": selected_service.name,
+                "fee": selected_service.fee,
             }
-            for s in available(db, c, target)
+            for s in slots
         ]
 
 
-def appt_dict(a, c):
+def appt_dict(a, c, db):
     return {
         "id": a.id,
         "clinic_id": a.clinic_id,
@@ -486,6 +705,13 @@ def appt_dict(a, c):
         "status": a.status,
         "source": a.source,
         "paid_amount": a.paid_amount,
+        "reminder_response": a.reminder_response,
+        "reminder_response_at": a.reminder_response_at,
+        "doctor_id": a.doctor_id,
+        "doctor": db.get(Doctor, a.doctor_id).name if a.doctor_id and db.get(Doctor, a.doctor_id) else c.doctor,
+        "service_id": a.service_id,
+        "service": db.get(Service, a.service_id).name if a.service_id and db.get(Service, a.service_id) else "Consultation",
+        "service_fee": a.service_fee,
         "label": readable(c, a.starts),
         "consent": a.consent,
     }
@@ -499,7 +725,7 @@ def appointments(clinic_id: int, user=Depends(principal)):
         if not c:
             raise HTTPException(404, "Clinic not found")
         return [
-            appt_dict(a, c)
+            appt_dict(a, c, db)
             for a in db.scalars(
                 select(Appointment)
                 .where(Appointment.clinic_id == clinic_id)
@@ -536,18 +762,22 @@ def appointment(payload: AppointmentInput, user=Depends(principal)):
             name=payload.name,
             contact=contact,
             consent=payload.consent and not bool(thread and thread.opted_out),
+            doctor_id=payload.doctor_id,
+            service_id=payload.service_id,
         )
         audit(db, user["username"], "appointment.staff_created", a.id, c.id)
+        doctor = db.get(Doctor, a.doctor_id) if a.doctor_id else None
+        service = db.get(Service, a.service_id) if a.service_id else None
         if thread and not thread.opted_out:
             queue_reply(
                 db,
                 c,
                 thread,
-                f"Appointment #{a.id} confirmed for {readable(c,a.starts)} with {c.doctor}. Reply CANCEL or STAFF for changes.",
+                f"Appointment #{a.id} confirmed for {readable(c,a.starts)} with {doctor.name if doctor else c.doctor}, {service.name if service else 'Consultation'}. Reply CANCEL or STAFF for changes.",
                 f"manual-confirm:{a.id}",
                 actor="staff",
             )
-        return appt_dict(a, c)
+        return appt_dict(a, c, db)
 
 
 @app.patch("/api/appointments/{appointment_id}")
@@ -567,16 +797,39 @@ def change_appointment(
             raise HTTPException(
                 409, "Create a new booking to reactivate a closed appointment"
             )
-        if payload.scheduled_at:
+        if payload.scheduled_at or payload.doctor_id or payload.service_id:
             if a.status != "confirmed":
                 raise HTTPException(
                     409, "Only confirmed appointments can be rescheduled"
                 )
-            reschedule(db, c, a, as_stamp(payload.scheduled_at, c))
+            old_start, old_doctor_id, old_service_id = a.starts, a.doctor_id, a.service_id
+            starts = as_stamp(payload.scheduled_at, c) if payload.scheduled_at else a.starts
+            reschedule(
+                db,
+                c,
+                a,
+                starts,
+                doctor_id=payload.doctor_id,
+                service_id=payload.service_id,
+            )
+            if (
+                old_start != a.starts
+                or old_doctor_id != a.doctor_id
+                or old_service_id != a.service_id
+            ):
+                offer_waitlist_for_slot(
+                    db, c, old_start, old_doctor_id, old_service_id,
+                    demo=a.source == "demo",
+                )
         if payload.status:
             a.status = payload.status
             if a.status != "confirmed":
                 cancel_reminders(db, a)
+            if a.status == "cancelled":
+                offer_waitlist_for_slot(
+                    db, c, a.starts, a.doctor_id, a.service_id,
+                    demo=a.source == "demo",
+                )
         if payload.paid_amount is not None:
             a.paid_amount = payload.paid_amount
         audit(db, user["username"], "appointment.updated", a.id, cid)
@@ -595,7 +848,7 @@ def change_appointment(
                 f"update:{a.id}:{uuid4()}",
                 actor="staff",
             )
-        return appt_dict(a, c)
+        return appt_dict(a, c, db)
 
 
 @app.get("/api/threads")
@@ -740,6 +993,58 @@ def erase_patient(thread_id: int, user=Depends(principal)):
         db.execute(delete(Message).where(Message.thread_id.in_(tids)))
         db.execute(delete(Thread).where(Thread.id.in_(tids)))
         audit(db, user["username"], "patient.erased", thread_id, cid)
+    return {"ok": True}
+
+
+@app.get("/api/waitlist")
+def waitlist(clinic_id: int, user=Depends(principal)):
+    check_scope(user, clinic_id)
+    with transaction(clinic_id) as db:
+        clinic = db.get(Clinic, clinic_id)
+        if not clinic:
+            raise HTTPException(404, "Clinic not found")
+        if not limits_for(clinic)["waitlist"]:
+            raise HTTPException(403, "Waitlist is available on the Growth plan")
+        return [
+            {
+                "id": entry.id,
+                "name": entry.name,
+                "contact": entry.contact,
+                "status": entry.status,
+                "created": entry.created,
+                "expires": entry.expires,
+                "offered_starts": entry.offered_starts,
+                "doctor": db.get(Doctor, entry.offered_doctor_id).name if entry.offered_doctor_id and db.get(Doctor, entry.offered_doctor_id) else "Any doctor",
+                "service": db.get(Service, entry.offered_service_id).name if entry.offered_service_id and db.get(Service, entry.offered_service_id) else "Any service",
+            }
+            for entry in db.scalars(
+                select(WaitlistEntry)
+                .where(WaitlistEntry.clinic_id == clinic_id)
+                .order_by(WaitlistEntry.created.desc())
+                .limit(500)
+            )
+        ]
+
+
+@app.post("/api/waitlist/{entry_id}/cancel")
+def cancel_waitlist_entry(entry_id: int, user=Depends(principal)):
+    with transaction() as db:
+        entry = db.get(WaitlistEntry, entry_id)
+        if not entry:
+            raise HTTPException(404, "Waitlist entry not found")
+        clinic_id = entry.clinic_id
+    check_scope(user, clinic_id)
+    with transaction(clinic_id) as db:
+        entry = db.get(WaitlistEntry, entry_id)
+        clinic = db.get(Clinic, clinic_id)
+        released = None
+        if entry.status == "offered":
+            released = (entry.offered_starts, entry.offered_doctor_id, entry.offered_service_id)
+        entry.status = "cancelled"
+        entry.expires = None
+        audit(db, user["username"], "waitlist.cancelled", entry.id, clinic_id)
+        if released:
+            offer_waitlist_for_slot(db, clinic, *released)
     return {"ok": True}
 
 
@@ -941,9 +1246,10 @@ def report(clinic_id: int, user=Depends(principal)):
             "needs_attention": sum(bool(t.attention) for t in threads),
             "recorded_payments": sum(a.paid_amount for a in appts),
             "estimated_booking_value": sum(
-                a.status in {"confirmed", "completed"} for a in appts
-            )
-            * c.fee,
+                (a.service_fee if a.service_id else c.fee)
+                for a in appts
+                if a.status in {"confirmed", "completed"}
+            ),
             "monthly_messages": usage,
             "monthly_limit": c.monthly_limit,
             "definition": "Operational totals across all retained live data. Bookings include staff bookings; payments are staff recorded, not payment-gateway verified. No incremental revenue claim.",

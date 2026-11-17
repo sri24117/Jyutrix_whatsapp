@@ -44,13 +44,15 @@ cp .env.example .env
 - Responsive admin, owner and receptionist workspace.
 - Persistent cookie sessions, CSRF protection, password hashing, login throttling and revocation.
 - Clinic isolation on all patient, appointment, job and report APIs.
-- Timezone-aware appointments, schedule breaks, closed days, leave dates and duration validation.
+- Timezone-aware, doctor-specific schedules with service-specific appointment durations/fees, breaks, closed days and leave dates.
+- Starter/Growth server-side doctor/service caps, multi-doctor/service selection in the booking flow and per-doctor overlap prevention.
 - Choose a slot and explicitly confirm before booking; confirm cancellation; atomic rescheduling.
 - Clinic-level transaction locks and PostgreSQL exclusion constraints against overlapping confirmed bookings.
 - Kapso **Meta-format** webhooks, HMAC verification, durable inbox, provider-message and delivery deduplication.
 - Outbox with bounded retry for known transient errors, delivery receipts and operator review for uncertain sends.
 - Staff takeover cancels pending automated replies; incoming messages remain visible.
-- Reminder template jobs with permission, opt-out, cancellation and reschedule checks.
+- Reminder template jobs with permission, opt-out, cancellation and reschedule checks, plus optional signed Confirm/Reschedule/Cancel quick replies using a separately approved template.
+- Growth cancellation waitlist with explicit WhatsApp consent, one-at-a-time offers, a 20-minute expiry, accept/pass, STOP cleanup and a staff dashboard. Automated offers require an eligible open WhatsApp service window.
 - Manual phone/walk-in bookings in the same schedule.
 - Demo-excluded reports, staff-recorded attendance and payments, message allowance and plan expiry.
 - Audit log API, patient deletion, retention task, credential recovery, Docker Compose and HTTPS proxy.
@@ -59,13 +61,13 @@ cp .env.example .env
 
 ## Deliberate scope
 
-One doctor and one schedule per clinic. Reception staff must enter phone/walk-in bookings in this schedule. External calendars are not synchronized. Billing is manually tracked, not payment collection. The deterministic flow recognizes selected Telugu/Hindi expressions but responses are English; full local-language conversational quality is not claimed. Media and unsupported questions go to staff. SMS, voice telephony, WhatsApp Calling media, prescriptions, diagnosis, EHR and bulk marketing are not implemented.
+Starter/Pilot supports one active doctor; Growth supports up to five doctors with separate schedules within one clinic location. Reception staff must enter phone/walk-in bookings in the shared schedule. Multiple branches and external calendars are not implemented. Billing is manually tracked, not payment collection. The deterministic flow recognizes selected Telugu/Hindi expressions but responses are English; full local-language conversational quality is not claimed. Media and unsupported questions go to staff. SMS, voice telephony, WhatsApp Calling media, prescriptions, diagnosis, EHR and bulk marketing are not implemented.
 
 Voice endpoint support is a server integration boundary, not a connected phone agent. It cannot authenticate callers or automatically cancel/confirm phone appointments. See `docs/VOICE.md`.
 
 ## Production deployment
 
-Read **docs/DEPLOYMENT.md**, **docs/KAPSO.md** and **docs/LIVE_ACCEPTANCE.md** in that order. Use PostgreSQL; production refuses SQLite and weak/default credentials. New production databases start empty. Add your real clinic and staff accounts through the dashboard.
+Read **docs/DEPLOYMENT.md**, **docs/KAPSO.md**, **docs/GROWTH_PLAN.md** and **docs/LIVE_ACCEPTANCE.md** in that order. Use PostgreSQL; production refuses SQLite and weak/default credentials. New production databases start empty. Add your real clinic and staff accounts through the dashboard.
 
 The original prototype’s schema is not compatible with this version. This package does not auto-import its sample clinics, fake revenue or patient data. To import genuine historical records, take a backup and use a reviewed migration with clinic ownership and consent mapping; do not point this app at the old SQLite database.
 

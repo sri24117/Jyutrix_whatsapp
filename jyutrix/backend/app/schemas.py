@@ -67,7 +67,8 @@ class ClinicInput(Strict):
     number_id: str | None = Field(default=None, pattern=r"^\d{5,30}$")
     enabled: bool = False
     template_approved: bool = False
-    plan: str = Field(default="Pilot", max_length=30)
+    reminder_buttons_approved: bool = False
+    plan: Literal["Pilot", "Starter", "Growth", "Pro"] = "Pilot"
     monthly_fee: int = Field(default=4999, ge=0, le=100000)
     monthly_limit: int = Field(default=2000, ge=1, le=100000)
     pilot_end: int | None = None
@@ -112,6 +113,19 @@ class ReplyInput(Strict):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class DoctorInput(Strict):
+    name: str = Field(min_length=2, max_length=120)
+    schedule: Schedule | None = None
+    active: bool = True
+
+
+class ServiceInput(Strict):
+    name: str = Field(min_length=2, max_length=120)
+    duration: int = Field(default=30, ge=5, le=240)
+    fee: int = Field(default=500, ge=0, le=100000)
+    active: bool = True
+
+
 class AppointmentInput(Strict):
     clinic_id: int
     name: str = Field(min_length=1, max_length=120)
@@ -119,11 +133,15 @@ class AppointmentInput(Strict):
     scheduled_at: str
     request_key: str = Field(min_length=8, max_length=100)
     consent: bool = False
+    doctor_id: int | None = None
+    service_id: int | None = None
 
 
 class AppointmentUpdate(Strict):
     status: Literal["confirmed", "completed", "no_show", "cancelled"] | None = None
     scheduled_at: str | None = None
+    doctor_id: int | None = None
+    service_id: int | None = None
     paid_amount: int | None = Field(default=None, ge=0, le=10000000)
 
 

@@ -4,6 +4,7 @@ import time
 from sqlalchemy import (
     create_engine,
     event,
+    inspect,
     select,
     text,
     ForeignKey,
@@ -41,6 +42,7 @@ class Clinic(Base):
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     template_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_buttons_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     plan: Mapped[str] = mapped_column(String(30), default="Pilot")
     monthly_fee: Mapped[int] = mapped_column(Integer, default=4999)
     monthly_limit: Mapped[int] = mapped_column(Integer, default=2000)
@@ -122,6 +124,47 @@ class Message(Base):
     created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
 
 
+class Doctor(Base):
+    __tablename__ = "doctors"
+    __table_args__ = (UniqueConstraint("clinic_id", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    schedule: Mapped[dict] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
+
+
+class Service(Base):
+    __tablename__ = "services_catalog"
+    __table_args__ = (UniqueConstraint("clinic_id", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    duration: Mapped[int] = mapped_column(Integer, default=30)
+    fee: Mapped[int] = mapped_column(Integer, default=500)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
+
+
+class WaitlistEntry(Base):
+    __tablename__ = "waitlist_entries"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.id", ondelete="CASCADE"), index=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey("threads.id", ondelete="CASCADE"), index=True)
+    doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)
+    service_id: Mapped[int | None] = mapped_column(ForeignKey("services_catalog.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(120))
+    contact: Mapped[str] = mapped_column(String(100))
+    consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(20), default="waiting", index=True)
+    offered_starts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    offered_doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True)
+    offered_service_id: Mapped[int | None] = mapped_column(ForeignKey("services_catalog.id"), nullable=True)
+    expires: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
+
+
 class Appointment(Base):
     __tablename__ = "appointments"
     __table_args__ = (
@@ -130,6 +173,9 @@ class Appointment(Base):
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     clinic_id: Mapped[int] = mapped_column(ForeignKey("clinics.id"), index=True)
+    doctor_id: Mapped[int | None] = mapped_column(ForeignKey("doctors.id"), nullable=True, index=True)
+    service_id: Mapped[int | None] = mapped_column(ForeignKey("services_catalog.id"), nullable=True)
+    service_fee: Mapped[int] = mapped_column(Integer, default=0)
     thread_id: Mapped[int | None] = mapped_column(
         ForeignKey("threads.id", ondelete="SET NULL"), nullable=True
     )
@@ -142,6 +188,8 @@ class Appointment(Base):
     request_key: Mapped[str] = mapped_column(String(200), unique=True)
     consent: Mapped[bool] = mapped_column(Boolean, default=False)
     paid_amount: Mapped[int] = mapped_column(Integer, default=0)
+    reminder_response: Mapped[str] = mapped_column(String(30), default="pending")
+    reminder_response_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created: Mapped[int] = mapped_column(Integer, default=lambda: int(time.time()))
 
 
@@ -234,20 +282,76 @@ def audit(db, actor, action, target, clinic_id=None):
 
 def init_db():
     Base.metadata.create_all(engine)
+    # Idempotent additive migration for the Growth scheduling fields. Existing
+    # appointments are backfilled to the clinic's original/default doctor below.
+    columns = {column["name"] for column in inspect(engine).get_columns("appointments")}
+    clinic_columns = {column["name"] for column in inspect(engine).get_columns("clinics")}
+    add_service_fee = "service_fee" not in columns
+    with engine.begin() as conn:
+        if "reminder_buttons_approved" not in clinic_columns:
+            conn.execute(text("ALTER TABLE clinics ADD COLUMN reminder_buttons_approved BOOLEAN NOT NULL DEFAULT FALSE"))
+        if "reminder_response" not in columns:
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN reminder_response VARCHAR(30) NOT NULL DEFAULT 'pending'"))
+        if "reminder_response_at" not in columns:
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN reminder_response_at INTEGER"))
+        if "doctor_id" not in columns:
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN doctor_id INTEGER REFERENCES doctors(id)"))
+        if "service_id" not in columns:
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN service_id INTEGER REFERENCES services_catalog(id)"))
+        if "service_fee" not in columns:
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN service_fee INTEGER NOT NULL DEFAULT 0"))
+    with Session(engine, expire_on_commit=False) as db:
+        for clinic in db.scalars(select(Clinic)).all():
+            doctor = db.scalar(select(Doctor).where(Doctor.clinic_id == clinic.id).order_by(Doctor.id).limit(1))
+            if not doctor:
+                doctor = Doctor(clinic_id=clinic.id, name=clinic.doctor, schedule=clinic.schedule)
+                db.add(doctor)
+                db.flush()
+            service = db.scalar(select(Service).where(Service.clinic_id == clinic.id).order_by(Service.id).limit(1))
+            if not service:
+                service = Service(
+                    clinic_id=clinic.id,
+                    name=(clinic.services or ["General consultation"])[0][:120],
+                    duration=clinic.schedule.get("duration", 30),
+                    fee=clinic.fee,
+                )
+                db.add(service)
+                db.flush()
+            db.execute(
+                Appointment.__table__.update()
+                .where(Appointment.clinic_id == clinic.id, Appointment.doctor_id.is_(None))
+                .values(doctor_id=doctor.id)
+            )
+            db.execute(
+                Appointment.__table__.update()
+                .where(Appointment.clinic_id == clinic.id, Appointment.service_id.is_(None))
+                .values(service_id=service.id)
+            )
+            if add_service_fee:
+                for appointment in db.scalars(
+                    select(Appointment).where(Appointment.clinic_id == clinic.id)
+                ):
+                    current_service = db.get(Service, appointment.service_id)
+                    appointment.service_fee = current_service.fee if current_service else clinic.fee
+        db.commit()
     if engine.dialect.name == "postgresql":
         with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
             conn.execute(text("""DO $$ BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'appointments_no_overlap') THEN
-                    ALTER TABLE appointments ADD CONSTRAINT appointments_no_overlap
-                    EXCLUDE USING gist (clinic_id WITH =, (source = 'demo') WITH =, int8range(starts::bigint, ends::bigint, '[)') WITH &&)
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'appointments_doctor_no_overlap') THEN
+                    ALTER TABLE appointments ADD CONSTRAINT appointments_doctor_no_overlap
+                    EXCLUDE USING gist (clinic_id WITH =, doctor_id WITH =, (source = 'demo') WITH =, int8range(starts::bigint, ends::bigint, '[)') WITH &&)
                     WHERE (status = 'confirmed');
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'appointments_no_overlap') THEN
+                    ALTER TABLE appointments DROP CONSTRAINT appointments_no_overlap;
                 END IF;
             END $$"""))
     else:
         with engine.begin() as conn:
+            conn.execute(text("DROP INDEX IF EXISTS appointments_live_start"))
             conn.execute(
                 text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS appointments_live_start ON appointments(clinic_id, starts, (source = 'demo')) WHERE status='confirmed'"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS appointments_doctor_start ON appointments(clinic_id, doctor_id, starts, (source = 'demo')) WHERE status='confirmed'"
                 )
             )

@@ -79,6 +79,10 @@ function submit(form) {
   assert($("#appointment-rows").textContent.includes("Demo patient"));
   click("nav [data-view=settings]");
   assert($("#settings-form"));
+  await waitFor(
+    () => $("#growth-catalog-content")?.textContent.includes("Starter plan"),
+    "Growth plan catalog",
+  );
   $("#settings-form [name=name]").value =
     'Demo <img src=x onerror="window.xss=true"> Dental';
   submit("#settings-form");
@@ -88,6 +92,12 @@ function submit(form) {
   );
   assert.equal(w.xss, undefined);
   assert.equal($("#clinic-select img"), null);
+  $("#settings-form [name=plan]").value = "Growth";
+  submit("#settings-form");
+  await waitFor(() => !$("#waitlist-nav").hidden, "Growth waitlist entitlement");
+  click("nav [data-view=waitlist]");
+  await waitFor(() => $("#content .empty"), "waitlist view");
+  assert($("#content").textContent.includes("No waitlist requests"));
   click("nav [data-view=overview]");
   assert.equal($("#content .hero img"), null);
   // Patient-controlled text must render as text in schedule and conversation views.

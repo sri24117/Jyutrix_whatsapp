@@ -21,6 +21,9 @@ class Settings:
     reminder_template: str = os.getenv(
         "REMINDER_TEMPLATE", "jyutrix_appointment_reminder"
     )
+    reminder_buttons_template: str = os.getenv(
+        "REMINDER_BUTTON_TEMPLATE", "jyutrix_appointment_reminder_buttons"
+    )
     template_language: str = os.getenv("TEMPLATE_LANGUAGE", "en_US")
     voice_key: str = os.getenv("VOICE_TOOL_KEY", "")
     retention_days: int = int(os.getenv("RETENTION_DAYS", "90"))

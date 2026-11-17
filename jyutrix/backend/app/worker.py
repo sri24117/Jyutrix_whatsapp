@@ -8,13 +8,15 @@ from .database import (
     Thread,
     Message,
     Appointment,
+    WaitlistEntry,
     Heartbeat,
     audit,
 )
 from .config import settings
-from .kapso import send, ProviderError
+from .kapso import send, ProviderError, make_reminder_action_token
 from .receptionist import inbound, takeover
 from .booking import readable
+from .waitlist import expire_waitlist_offer
 
 log = logging.getLogger("jyutrix.worker")
 
@@ -60,6 +62,7 @@ def _run_job(job_id, clinic_id):
                         p["provider_id"],
                         provider_id=p["provider_id"],
                         received_at=p.get("timestamp"),
+                        button_payload=p.get("button_payload"),
                     )
                 except Exception:
                     # Roll back the whole event, including partial booking/reply, before recording failure.
@@ -108,22 +111,45 @@ def _run_job(job_id, clinic_id):
             if not clinic.template_approved:
                 fail(db, job, "Reminder template not marked approved")
                 return
+            components = [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": thread.name},
+                        {"type": "text", "text": clinic.name},
+                        {"type": "text", "text": readable(clinic, appt.starts)},
+                        {"type": "text", "text": str(appt.id)},
+                    ],
+                }
+            ]
+            template_name = settings.reminder_template
+            if clinic.reminder_buttons_approved:
+                if not settings.webhook_secret:
+                    fail(db, job, "Reminder action signing secret is unavailable")
+                    return
+                template_name = settings.reminder_buttons_template
+                for index, action in enumerate(("confirm", "reschedule", "cancel")):
+                    components.append(
+                        {
+                            "type": "button",
+                            "sub_type": "quick_reply",
+                            "index": str(index),
+                            "parameters": [
+                                {
+                                    "type": "payload",
+                                    "payload": make_reminder_action_token(
+                                        clinic.id, appt.id, appt.starts, action
+                                    ),
+                                }
+                            ],
+                        }
+                    )
             payload = {
                 "type": "template",
                 "template": {
-                    "name": settings.reminder_template,
+                    "name": template_name,
                     "language": {"code": settings.template_language},
-                    "components": [
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": thread.name},
-                                {"type": "text", "text": clinic.name},
-                                {"type": "text", "text": readable(clinic, appt.starts)},
-                                {"type": "text", "text": str(appt.id)},
-                            ],
-                        }
-                    ],
+                    "components": components,
                 },
             }
             if not job.message_id:
@@ -234,6 +260,23 @@ def tick(max_jobs=20):
                 .limit(max_jobs)
             )
         )
+        expired_offers = list(
+            db.execute(
+                select(WaitlistEntry.id, WaitlistEntry.clinic_id)
+                .where(
+                    WaitlistEntry.status == "offered",
+                    WaitlistEntry.expires <= int(time.time()),
+                )
+                .order_by(WaitlistEntry.expires)
+                .limit(max_jobs)
+            )
+        )
+    for entry_id, clinic_id in expired_offers:
+        with transaction(clinic_id) as db:
+            clinic = db.get(Clinic, clinic_id)
+            entry = db.get(WaitlistEntry, entry_id)
+            if clinic and entry:
+                expire_waitlist_offer(db, clinic, entry)
     for job_id, clinic_id in jobs:
         try:
             process_job(job_id, clinic_id)
