@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import time
 import httpx
 from .config import settings
 
@@ -20,6 +21,48 @@ def verify(raw, signature):
             signature,
         )
     )
+
+
+REMINDER_ACTIONS = {"confirm", "reschedule", "cancel"}
+
+
+def make_reminder_action_token(clinic_id, appointment_id, starts, action):
+    if action not in REMINDER_ACTIONS or not settings.webhook_secret:
+        raise ValueError("Reminder action signing is not configured")
+    fields = ["jx1", str(clinic_id), str(appointment_id), str(starts), action, str(starts)]
+    body = ".".join(fields)
+    signature = hmac.new(
+        settings.webhook_secret.encode(), body.encode(), hashlib.sha256
+    ).hexdigest()[:24]
+    return f"{body}.{signature}"
+
+
+def verify_reminder_action_token(token, now=None):
+    if not isinstance(token, str) or not settings.webhook_secret or len(token) > 200:
+        return None
+    parts = token.split(".")
+    if len(parts) != 7 or parts[0] != "jx1" or parts[4] not in REMINDER_ACTIONS:
+        return None
+    body, signature = ".".join(parts[:-1]), parts[-1]
+    expected = hmac.new(
+        settings.webhook_secret.encode(), body.encode(), hashlib.sha256
+    ).hexdigest()[:24]
+    if not hmac.compare_digest(expected, signature):
+        return None
+    try:
+        clinic_id, appointment_id, starts, expires = map(
+            int, (parts[1], parts[2], parts[3], parts[5])
+        )
+    except ValueError:
+        return None
+    if starts != expires or expires <= int(now if now is not None else time.time()):
+        return None
+    return {
+        "clinic_id": clinic_id,
+        "appointment_id": appointment_id,
+        "starts": starts,
+        "action": parts[4],
+    }
 
 
 def send(number_id, contact, payload):
@@ -86,13 +129,21 @@ def normalize_meta(body):
                     or ""
                 )
                 content = m.get("text", {}).get("body")
+                button_payload = None
                 if content is None:
                     interactive = m.get("interactive", {})
+                    button_reply = interactive.get("button_reply") or {}
+                    button_payload = button_reply.get("payload")
+                    reply_id = button_reply.get("id")
+                    if not button_payload and isinstance(reply_id, str) and reply_id.startswith("jx1."):
+                        button_payload = reply_id
                     content = (
-                        interactive.get("button_reply")
+                        button_reply
                         or interactive.get("list_reply")
                         or {}
                     ).get("title") or m.get("button", {}).get("text")
+                    if button_payload is None:
+                        button_payload = m.get("button", {}).get("payload")
                 if content is None:
                     content = "[Unsupported media: staff review required]"
                 records.append(
@@ -103,6 +154,7 @@ def normalize_meta(body):
                         "contact": contact,
                         "name": str(names.get(contact, "Patient"))[:120],
                         "text": str(content)[:4000],
+                        "button_payload": str(button_payload)[:200] if button_payload else None,
                         "timestamp": int(m.get("timestamp", 0) or 0),
                     }
                 )

@@ -1,12 +1,16 @@
 # Release verification — 14 October 2026
 
-## Website and enquiry workflow follow-up — 17 November 2026
+## Website, enquiry, Growth, waitlist and reminder follow-up — 17 November 2026
 
 - Added the public marketing page at `/` and moved the clinic workspace to `/app`.
 - Added a public, consent-checked demo request form with IP rate limiting and a honeypot; enquiries are administrator-only, stage-tracked, deletable, and included in the configured retention task.
-- Fixed the production configuration so it rejects the public local-demo admin password.
-- Updated Hostinger KVM / `jyutrix.cloud` deployment instructions and canonical `www` redirect.
-- Local verification after these changes: **56 backend tests passed** on SQLite; DOM UI smoke passed; both frontend scripts passed `node --check`. Docker/PostgreSQL and real deployment remain unverified in this environment.
+- Fixed production configuration so it rejects the public local-demo admin password.
+- Added doctor-specific schedules, service durations/fees, per-doctor overlap prevention, server-enforced Starter/Growth doctor and service caps, plan-specific reminder timing, and service/doctor selection in booking flows.
+- Added an idempotent additive schema migration that backfills existing appointments to each clinic's default doctor/service.
+- Added a consent-gated Growth cancellation waitlist with 20-minute offers, accept/pass, expiry progression, STOP cleanup, admin endpoints/UI and retention cleanup. Automated offers are restricted to eligible WhatsApp threads inside the 24-hour service window.
+- Added opt-in approved-template reminder quick replies with signed appointment-bound payloads, validation for appointment/clinic/contact/status/expiry, confirm recording, reschedule through normal booking checks and a second cancellation confirmation. Legacy reminder templates remain the default unless the separate button template is approved and enabled.
+- Updated Hostinger KVM / `jyutrix.cloud` deployment guidance and canonical `www` redirect.
+- Local verification: **67 backend tests passed** on SQLite, including waitlist consent, Growth entitlement, cancellation-to-offer booking, expiry progression, STOP/next-candidate, demo isolation, signed reminder buttons and webhook-to-worker payload handling. DOM UI smoke passed with 75 HTTP requests, including the Growth waitlist entitlement and empty-state view; frontend JavaScript syntax and Python compilation passed. PostgreSQL migration/constraint, Docker Compose, live WhatsApp and actual deployment remain unverified.
 
 ## Completed in the original build
 

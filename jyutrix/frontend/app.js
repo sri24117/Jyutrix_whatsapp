@@ -24,6 +24,9 @@ const state = {
   appts: [],
   jobs: [],
   leads: [],
+  doctors: [],
+  services: [],
+  entitlements: {},
   report: {},
   status: {},
   selectedThread: null,
@@ -86,6 +89,7 @@ const titles = {
   settings: "Clinic settings",
   demo: "Try the demo",
   leads: "Sales enquiries",
+  waitlist: "Cancellation waitlist",
 };
 async function launch() {
   state.clinics = await api("/api/clinics");
@@ -130,10 +134,12 @@ async function load(render = true) {
     api(`/api/jobs?clinic_id=${id}`),
     api(`/api/reports?clinic_id=${id}`),
     api("/api/status"),
+    api(`/api/clinics/${id}/entitlements`),
   ]);
   if (state.clinic.id !== id) return;
-  [state.threads, state.appts, state.jobs, state.report, state.status] =
+  [state.threads, state.appts, state.jobs, state.report, state.status, state.entitlements] =
     results;
+  $("#waitlist-nav").hidden = !state.entitlements.limits?.waitlist;
   $("#attention-count").textContent =
     state.threads.filter((t) => t.attention).length || "";
   const missing = [];
@@ -177,6 +183,7 @@ function renderView() {
     delivery: renderDelivery,
     settings: renderSettings,
     demo: renderDemo,
+    waitlist: renderWaitlist,
   })[state.view]();
 }
 function renderOverview() {
@@ -229,7 +236,7 @@ function renderAppointments() {
     `<section class="panel"><div class="panel-heading"><div><h3>A shared schedule</h3><p>Add phone and walk-in bookings here to keep WhatsApp availability accurate.</p></div><button class="primary" data-action="new-appointment">+ Book appointment</button></div><div class="toolbar"><input id="appointment-search" placeholder="Search patient or contact" aria-label="Search appointments"><select id="appointment-filter" class="status-filter" aria-label="Filter appointments"><option value="">All statuses</option>${["confirmed", "completed", "no_show", "cancelled"].map((s) => `<option>${s}</option>`).join("")}</select><button class="secondary" data-action="export">Export CSV</button></div><div class="table-wrap"><table><thead><tr><th>Patient</th><th>Appointment</th><th>Status</th><th>Source</th><th>Actions</th></tr></thead><tbody id="appointment-rows">${rows.map((a) => appointmentRow(a)).join("")}</tbody></table></div>${!rows.length ? empty("No appointments yet", "Book manually, or let patients choose and confirm a WhatsApp slot.") : ""}</section>`;
 }
 function appointmentRow(a) {
-  return `<tr data-search="${esc((a.name + " " + a.contact).toLowerCase())}" data-status="${a.status}"><td><strong>${esc(a.name)}</strong><small>${esc(a.contact)}</small></td><td>${esc(a.label)}<small>#${a.id}${a.paid_amount ? " · " + money(a.paid_amount) : ""}</small></td><td>${pill(a.status, a.status === "confirmed" || a.status === "completed" ? "good" : "")}</td><td>${pill(a.source, a.source === "demo" ? "warn" : "")}</td><td><div class="actions">${a.status === "confirmed" ? `<button class="secondary" data-action="complete" data-id="${a.id}">Complete</button><button class="secondary" data-action="reschedule" data-id="${a.id}">Move</button><button class="quiet" data-action="no-show" data-id="${a.id}">No-show</button><button class="danger" data-action="cancel" data-id="${a.id}">Cancel</button>` : ""}<button class="quiet" data-action="payment" data-id="${a.id}">Record payment</button></div></td></tr>`;
+  return `<tr data-search="${esc((a.name + " " + a.contact).toLowerCase())}" data-status="${a.status}"><td><strong>${esc(a.name)}</strong><small>${esc(a.contact)}</small></td><td>${esc(a.label)}<small>${esc(a.doctor || "")} · ${esc(a.service || "")}</small><small>#${a.id}${a.paid_amount ? " · " + money(a.paid_amount) : ""}${a.reminder_response && a.reminder_response !== "pending" ? " · reminder: " + esc(a.reminder_response.replaceAll("_", " ")) : ""}</small></td><td>${pill(a.status, a.status === "confirmed" || a.status === "completed" ? "good" : "")}</td><td>${pill(a.source, a.source === "demo" ? "warn" : "")}</td><td><div class="actions">${a.status === "confirmed" ? `<button class="secondary" data-action="complete" data-id="${a.id}">Complete</button><button class="secondary" data-action="reschedule" data-id="${a.id}">Move</button><button class="quiet" data-action="no-show" data-id="${a.id}">No-show</button><button class="danger" data-action="cancel" data-id="${a.id}">Cancel</button>` : ""}<button class="quiet" data-action="payment" data-id="${a.id}">Record payment</button></div></td></tr>`;
 }
 function renderInbox() {
   if (!state.threads.find((t) => t.id === state.selectedThread))
@@ -282,7 +289,7 @@ function clinicFields(c = {}) {
     breaks: [{ start: "13:00", end: "14:00" }],
     leave_dates: [],
   };
-  return `<div class="form-grid"><label>Clinic name<input name="name" value="${esc(c.name || "")}" required maxlength="120"></label><label>Doctor name<input name="doctor" value="${esc(c.doctor || "")}" required maxlength="120"></label><label>Clinic phone<input name="phone" value="${esc(c.phone || "")}" placeholder="+919…" required></label><label>Consultation fee (₹)<input name="fee" type="number" min="0" value="${c.fee ?? 500}" required></label><label class="full">Address<input name="address" value="${esc(c.address || "")}" required maxlength="600"></label><label>Timezone<select name="timezone">${["Asia/Kolkata", "UTC"].map((z) => `<option ${c.timezone === z ? "selected" : ""}>${z}</option>`).join("")}</select></label><label>Appointment duration (minutes)<input name="duration" type="number" min="5" max="120" value="${s.duration}" required></label><label>Opens<input name="open" type="time" value="${s.open}" required></label><label>Closes<input name="close" type="time" value="${s.close}" required></label><label>Break starts (optional)<input name="break_start" type="time" value="${s.breaks[0]?.start || ""}"></label><label>Break ends<input name="break_end" type="time" value="${s.breaks[0]?.end || ""}"></label><div class="full"><label>Closed days</label><div class="status-line">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="check-label"><input type="checkbox" name="closed_days" value="${i}" ${s.closed_days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div></div><label class="full">Leave dates (one YYYY-MM-DD per line)<textarea name="leave_dates">${esc(s.leave_dates.join("\n"))}</textarea></label><label class="full">Approved services (one per line)<textarea name="services">${esc((c.services || ["Dental consultation"]).join("\n"))}</textarea></label><label>WhatsApp phone number ID<input name="number_id" value="${esc(c.number_id || "")}" placeholder="From Kapso" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Monthly outgoing message allowance<input name="monthly_limit" type="number" min="1" value="${c.monthly_limit ?? 2000}" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Plan<input name="plan" value="${esc(c.plan || "Pilot")}" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Monthly subscription (₹)<input name="monthly_fee" type="number" min="0" value="${c.monthly_fee ?? 4999}" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Plan expiry (optional)<input name="pilot_end" type="date" value="${c.pilot_end ? new Date(c.pilot_end * 1000).toISOString().slice(0, 10) : ""}" ${state.user.role !== "admin" ? "disabled" : ""}></label><div class="status-line"><label class="check-label"><input name="enabled" type="checkbox" ${c.enabled ? "checked" : ""}>Enable automated replies</label><label class="check-label"><input name="template_approved" type="checkbox" ${c.template_approved ? "checked" : ""}>Reminder template approved</label></div><div class="full"><label>Approved questions & answers</label><p class="hint">Only add administrative answers approved by the clinic.</p><div id="faq-rows">${(c.faqs || []).map((f) => faqRow(f)).join("")}</div><button type="button" class="secondary" data-action="add-faq">+ Add answer</button></div></div>`;
+  return `<div class="form-grid"><label>Clinic name<input name="name" value="${esc(c.name || "")}" required maxlength="120"></label><label>Doctor name<input name="doctor" value="${esc(c.doctor || "")}" required maxlength="120"></label><label>Clinic phone<input name="phone" value="${esc(c.phone || "")}" placeholder="+919…" required></label><label>Consultation fee (₹)<input name="fee" type="number" min="0" value="${c.fee ?? 500}" required></label><label class="full">Address<input name="address" value="${esc(c.address || "")}" required maxlength="600"></label><label>Timezone<select name="timezone">${["Asia/Kolkata", "UTC"].map((z) => `<option ${c.timezone === z ? "selected" : ""}>${z}</option>`).join("")}</select></label><label>Appointment duration (minutes)<input name="duration" type="number" min="5" max="120" value="${s.duration}" required></label><label>Opens<input name="open" type="time" value="${s.open}" required></label><label>Closes<input name="close" type="time" value="${s.close}" required></label><label>Break starts (optional)<input name="break_start" type="time" value="${s.breaks[0]?.start || ""}"></label><label>Break ends<input name="break_end" type="time" value="${s.breaks[0]?.end || ""}"></label><div class="full"><label>Closed days</label><div class="status-line">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="check-label"><input type="checkbox" name="closed_days" value="${i}" ${s.closed_days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div></div><label class="full">Leave dates (one YYYY-MM-DD per line)<textarea name="leave_dates">${esc(s.leave_dates.join("\n"))}</textarea></label><label class="full">Approved service descriptions (one per line)<textarea name="services">${esc((c.services || ["Dental consultation"]).join("\n"))}</textarea><p class="hint">Patient-facing approved descriptions. Booking duration and fee are configured separately in Growth scheduling below.</p></label><label>WhatsApp phone number ID<input name="number_id" value="${esc(c.number_id || "")}" placeholder="From Kapso" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Monthly outgoing message allowance<input name="monthly_limit" type="number" min="1" value="${c.monthly_limit ?? 2000}" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Plan<select name="plan" ${state.user.role !== "admin" ? "disabled" : ""}>${["Pilot", "Starter", "Growth"].map((p) => `<option value="${p}" ${(c.plan || "Pilot") === p ? "selected" : ""}>${p}</option>`).join("")}</select></label><label>Monthly subscription (₹)<input name="monthly_fee" type="number" min="0" value="${c.monthly_fee ?? 4999}" ${state.user.role !== "admin" ? "disabled" : ""}></label><label>Plan expiry (optional)<input name="pilot_end" type="date" value="${c.pilot_end ? new Date(c.pilot_end * 1000).toISOString().slice(0, 10) : ""}" ${state.user.role !== "admin" ? "disabled" : ""}></label><div class="status-line"><label class="check-label"><input name="enabled" type="checkbox" ${c.enabled ? "checked" : ""}>Enable automated replies</label><label class="check-label"><input name="template_approved" type="checkbox" ${c.template_approved ? "checked" : ""}>Reminder template approved</label><label class="check-label"><input name="reminder_buttons_approved" type="checkbox" ${c.reminder_buttons_approved ? "checked" : ""}>Quick-reply reminder template approved</label><p class="hint">Quick replies require a separate approved template with Confirm, Reschedule and Cancel buttons. See docs/KAPSO.md before enabling.</p></div><div class="full"><label>Approved questions & answers</label><p class="hint">Only add administrative answers approved by the clinic.</p><div id="faq-rows">${(c.faqs || []).map((f) => faqRow(f)).join("")}</div><button type="button" class="secondary" data-action="add-faq">+ Add answer</button></div></div>`;
 }
 function faqRow(f = {}) {
   return `<div class="faq-row"><input class="faq-question" value="${esc(f.question || "")}" placeholder="Patient question" aria-label="FAQ question" required maxlength="300"><textarea class="faq-answer" placeholder="Approved answer" aria-label="FAQ answer" required maxlength="1200">${esc(f.answer || "")}</textarea><button type="button" class="quiet" data-action="remove-faq" aria-label="Remove answer">✕</button></div>`;
@@ -322,6 +329,7 @@ function readClinic(form) {
       state.user.role === "admin" ? d.get("number_id") || null : old.number_id,
     enabled: d.has("enabled"),
     template_approved: d.has("template_approved"),
+    reminder_buttons_approved: d.has("reminder_buttons_approved"),
     plan: state.user.role === "admin" ? d.get("plan") : old.plan,
     monthly_fee:
       state.user.role === "admin"
@@ -341,10 +349,57 @@ function readClinic(form) {
         : old.pilot_end,
   };
 }
+function doctorFormHtml(doctor = {}) {
+  const schedule = doctor.schedule || state.clinic.schedule;
+  return `<form id="growth-doctor-form" data-id="${doctor.id || ""}"><div class="form-grid"><label>Doctor name<input name="name" value="${esc(doctor.name || "")}" required minlength="2" maxlength="120"></label><label>Opens<input name="open" type="time" value="${schedule.open}" required></label><label>Closes<input name="close" type="time" value="${schedule.close}" required></label><label>Appointment duration (minutes)<input name="duration" type="number" min="5" max="120" value="${schedule.duration}" required></label><label>Break starts<input name="break_start" type="time" value="${schedule.breaks[0]?.start || ""}"></label><label>Break ends<input name="break_end" type="time" value="${schedule.breaks[0]?.end || ""}"></label><div class="full"><label>Closed days</label><div class="status-line">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => `<label class="check-label"><input type="checkbox" name="closed_days" value="${i}" ${(schedule.closed_days || []).includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div></div><label class="full">Leave dates (one YYYY-MM-DD per line)<textarea name="leave_dates">${esc((schedule.leave_dates || []).join("\n"))}</textarea></label><label class="check-label"><input type="checkbox" name="active" ${doctor.active === false ? "" : "checked"}> Active for new bookings</label></div><div class="form-actions"><button class="primary">Save doctor</button></div></form>`;
+}
+function serviceFormHtml(service = {}) {
+  return `<form id="growth-service-form" data-id="${service.id || ""}"><div class="form-grid"><label>Service name<input name="name" value="${esc(service.name || "")}" required minlength="2" maxlength="120"></label><label>Duration (minutes)<input name="duration" type="number" min="5" max="240" value="${service.duration || 30}" required></label><label>Consultation fee (₹)<input name="fee" type="number" min="0" max="100000" value="${service.fee ?? 500}" required></label><label class="check-label"><input type="checkbox" name="active" ${service.active === false ? "" : "checked"}> Active for new bookings</label></div><div class="form-actions"><button class="primary">Save service</button></div></form>`;
+}
+function readDoctorForm(form) {
+  const data = new FormData(form);
+  return {
+    name: data.get("name"),
+    active: data.has("active"),
+    schedule: {
+      open: data.get("open"),
+      close: data.get("close"),
+      duration: Number(data.get("duration")),
+      closed_days: data.getAll("closed_days").map(Number),
+      breaks: data.get("break_start") ? [{ start: data.get("break_start"), end: data.get("break_end") }] : [],
+      leave_dates: String(data.get("leave_dates")).split("\n").map((s) => s.trim()).filter(Boolean),
+    },
+  };
+}
+async function renderGrowthCatalog() {
+  const target = $("#growth-catalog-content");
+  if (!target) return;
+  try {
+    const clinicId = state.clinic.id;
+    const [entitlements, doctors, services] = await Promise.all([
+      api(`/api/clinics/${clinicId}/entitlements`),
+      api(`/api/doctors?clinic_id=${clinicId}`),
+      api(`/api/services?clinic_id=${clinicId}`),
+    ]);
+    state.entitlements = entitlements;
+    state.doctors = doctors;
+    state.services = services;
+    if (!$("#growth-catalog-content")) return;
+    const editable = state.user.role !== "receptionist";
+    const canAddDoctor = editable && entitlements.usage.doctors < entitlements.limits.max_doctors;
+    const canAddService = editable && entitlements.usage.services < entitlements.limits.max_services;
+    target.innerHTML = `<div class="status-line">${pill(`${entitlements.plan} plan`)}${pill(`${entitlements.usage.doctors}/${entitlements.limits.max_doctors} doctors`)}${pill(`${entitlements.usage.services}/${entitlements.limits.max_services} services`)}</div><p class="hint">Growth supports up to five active doctors with doctor-specific schedules. Your current plan caps are enforced on the server. The cancellation waitlist is available on Growth; payment links are not available yet.</p><div class="two-col"><section><div class="panel-heading"><h3>Doctors</h3>${editable ? `<button class="secondary" data-action="new-doctor" ${canAddDoctor ? "" : "disabled title=\"Plan doctor limit reached\""}>+ Add doctor</button>` : ""}</div>${doctors.map((doctor) => `<div class="list-row"><div><strong>${esc(doctor.name)}</strong><p>${esc(doctor.schedule.open)}–${esc(doctor.schedule.close)} · ${doctor.schedule.duration} min · ${doctor.active ? "active" : "inactive"}</p></div>${editable ? `<button class="secondary" data-action="edit-doctor" data-id="${doctor.id}">Edit</button>` : ""}</div>`).join("")}</section><section><div class="panel-heading"><h3>Services</h3>${editable ? `<button class="secondary" data-action="new-service" ${canAddService ? "" : "disabled title=\"Plan service limit reached\""}>+ Add service</button>` : ""}</div>${services.map((service) => `<div class="list-row"><div><strong>${esc(service.name)}</strong><p>${service.duration} min · ${money(service.fee)} · ${service.active ? "active" : "inactive"}</p></div>${editable ? `<button class="secondary" data-action="edit-service" data-id="${service.id}">Edit</button>` : ""}</div>`).join("")}</section></div>`;
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
 function renderSettings() {
   const c = state.clinic;
   $("#content").innerHTML =
     `<section class="panel"><div class="panel-heading"><div><h3>Approved clinic information</h3><p>This information guides patient replies and appointment availability.</p></div>${state.user.role === "admin" ? '<button class="secondary" data-action="new-clinic">+ Add clinic</button>' : ""}</div>${state.user.role === "receptionist" ? '<p class="hint">Ask the clinic owner to update settings.</p>' : `<form id="settings-form">${clinicFields(c)}<div class="form-actions"><button class="primary">Save clinic settings</button><p class="hint">Schedule changes affect new bookings. Review existing appointments separately.</p></div></form>`}</section><section class="panel"><h3>WhatsApp activation</h3><div class="setup-step"><span>1</span><div><strong>Connect the clinic’s number in Kapso</strong><p>Use the clinic-owned account. Save its phone number ID above.</p></div></div><div class="setup-step"><span>2</span><div><strong>Register the clinic webhook</strong><p>Use the Meta payload option and the secret configured on the server. Your deployment guide contains the setup command.</p></div></div><div class="setup-step"><span>3</span><div><strong>Approve the reminder template and test</strong><p>Check booking, cancellation, staff takeover and message delivery from a real patient number before activation.</p></div></div><div class="status-line">${pill(state.status.kapso_configured ? "Credentials configured" : "Credentials missing", state.status.kapso_configured ? "good" : "warn")}${pill(state.status.ai_mode)}${pill("Live acceptance test required", "warn")}</div></section>${state.user.role === "admin" ? `<section class="panel"><div class="panel-heading"><h3>Clinic staff access</h3><button class="secondary" data-action="new-user">+ Add staff account</button></div><div id="users-list"></div></section>` : ""}<section class="panel password-panel"><h3>Change your password</h3><form id="password-form"><div class="form-grid"><label>Current password<input name="current" type="password" required autocomplete="current-password"></label><label>New password (16+ characters)<input name="new" type="password" required minlength="16" maxlength="128" autocomplete="new-password"></label></div><div class="form-actions"><button class="secondary">Change password & sign out</button></div></form></section>`;
+  $("#content .password-panel").insertAdjacentHTML("beforebegin", `<section class="panel"><div class="panel-heading"><div><h3>Growth scheduling</h3><p>Manage doctor-specific availability and service durations.</p></div></div><div id="growth-catalog-content"><p class="hint">Loading Growth plan details…</p></div></section>`);
+  renderGrowthCatalog();
   if (state.user.role === "admin")
     api("/api/users")
       .then((users) => {
@@ -358,6 +413,21 @@ function renderSettings() {
       })
       .catch((e) => toast(e.message, true));
 }
+function renderWaitlist() {
+  $("#content").innerHTML = `<section class="panel"><div class="panel-heading"><div><h3>Cancellation waitlist</h3><p>Consenting patients can receive one expiring offer when a suitable appointment opens.</p></div><button class="secondary" id="waitlist-refresh">Refresh</button></div><div id="waitlist-rows">Loading waitlist…</div><p class="hint">Offers are sent only when the patient has consented and a WhatsApp reply window is open. Otherwise the clinic must use its approved template and follow-up process. A waitlist offer is not a booked appointment.</p></section>`;
+  api(`/api/waitlist?clinic_id=${state.clinic.id}`)
+    .then((entries) => {
+      const target = $("#waitlist-rows");
+      if (!target || state.view !== "waitlist") return;
+      if (!entries.length) {
+        target.innerHTML = empty("No waitlist requests", "Patients can message WAITLIST and confirm consent to join.");
+        return;
+      }
+      target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Patient</th><th>State</th><th>Offer</th><th>Joined</th><th></th></tr></thead><tbody>${entries.map((entry) => `<tr><td><strong>${esc(entry.name)}</strong><small>${esc(entry.contact)}</small></td><td>${pill(entry.status, entry.status === "waiting" ? "warn" : entry.status === "booked" ? "good" : "")}</td><td>${entry.offered_starts ? `${esc(stamp(entry.offered_starts))}<small>${esc(entry.doctor)} · ${esc(entry.service)} · expires ${esc(stamp(entry.expires))}</small>` : "—"}</td><td>${esc(stamp(entry.created))}</td><td>${["waiting", "offered"].includes(entry.status) ? `<button class="danger" data-action="cancel-waitlist" data-id="${entry.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+    })
+    .catch((error) => toast(error.message, true));
+}
+
 function renderLeads() {
   $("#content").innerHTML = `<section class="panel"><div class="panel-heading"><div><h3>Website demo requests</h3><p>Keep sales follow-up in one place. Only administrator accounts can access these enquiries.</p></div></div><div id="leads-list">Loading enquiries…</div><p class="hint">Contact people only about their demo request. Delete records when no longer needed or when deletion is requested.</p></section>`;
   api("/api/leads")
@@ -384,12 +454,44 @@ function modal(title, html) {
   $("#modal").showModal();
 }
 async function newAppointment(moveId = null) {
-  const slots = await api(`/api/availability?clinic_id=${state.clinic.id}`);
   const a = state.appts.find((x) => x.id === moveId);
+  const clinicId = state.clinic.id;
+  const [doctors, services] = await Promise.all([
+    api(`/api/doctors?clinic_id=${clinicId}`),
+    api(`/api/services?clinic_id=${clinicId}`),
+  ]);
+  state.doctors = doctors;
+  state.services = services;
+  const activeDoctors = doctors.filter((d) => d.active);
+  const activeServices = services.filter((s) => s.active);
+  if (!activeDoctors.length || !activeServices.length) {
+    toast("Add an active doctor and service before booking", true);
+    return;
+  }
+  const doctorId = a?.doctor_id || activeDoctors[0].id;
+  const serviceId = a?.service_id || activeServices[0].id;
+  const slots = await api(`/api/availability?clinic_id=${clinicId}&doctor_id=${doctorId}&service_id=${serviceId}`);
   modal(
     moveId ? "Reschedule appointment" : "Book an appointment",
-    `<form id="appointment-form" data-move="${moveId || ""}"><div class="form-grid"><label>Patient name<input name="name" value="${esc(a?.name || "")}" required></label><label>Patient phone<input name="contact" value="${esc(a?.contact || "")}" placeholder="+919…" required></label><label class="full">Find a date<input id="booking-day" type="date"></label><label class="full">Available slot<select name="scheduled_at" id="slot-select" required>${slots.map((s) => `<option value="${esc(s.iso)}">${esc(s.label)}</option>`).join("")}</select></label><label class="full check-label"><input name="consent" type="checkbox">Patient agreed to appointment messages on WhatsApp</label></div><div class="form-actions"><button class="primary">${moveId ? "Confirm new time" : "Confirm booking"}</button></div><p class="hint">Availability is checked again when you confirm.</p></form>`,
+    `<form id="appointment-form" data-move="${moveId || ""}"><div class="form-grid"><label>Patient name<input name="name" value="${esc(a?.name || "")}" required></label><label>Patient phone<input name="contact" value="${esc(a?.contact || "")}" placeholder="+919…" required></label><label>Doctor<select name="doctor_id" id="booking-doctor">${activeDoctors.map((d) => `<option value="${d.id}" ${d.id === doctorId ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></label><label>Service<select name="service_id" id="booking-service">${activeServices.map((s) => `<option value="${s.id}" ${s.id === serviceId ? "selected" : ""}>${esc(s.name)} · ${s.duration} min · ${money(s.fee)}</option>`).join("")}</select></label><label class="full">Find a date<input id="booking-day" type="date"></label><label class="full">Available slot<select name="scheduled_at" id="slot-select" required>${slots.map((s) => `<option value="${esc(s.iso)}">${esc(s.label)}</option>`).join("")}</select></label><label class="full check-label"><input name="consent" type="checkbox" ${a?.consent ? "checked" : ""}>Patient agreed to appointment messages on WhatsApp</label></div><div class="form-actions"><button class="primary">${moveId ? "Confirm new time" : "Confirm booking"}</button></div><p class="hint">Availability is checked again for this doctor and service when you confirm.</p></form>`,
   );
+}
+
+async function refreshBookingSlots() {
+  const form = $("#appointment-form");
+  if (!form) return;
+  const date = $("#booking-day").value;
+  const params = new URLSearchParams({
+    clinic_id: String(state.clinic.id),
+    doctor_id: $("#booking-doctor").value,
+    service_id: $("#booking-service").value,
+  });
+  if (date) params.set("day", date);
+  const slots = await api(`/api/availability?${params}`);
+  $("#slot-select").innerHTML = slots
+    .map((slot) => `<option value="${esc(slot.iso)}">${esc(slot.label)}</option>`)
+    .join("");
+  if (!slots.length) toast("No slots available for this doctor, service and date");
 }
 function filterAppointments() {
   const q = $("#appointment-search").value.toLowerCase(),
@@ -441,10 +543,19 @@ document.addEventListener("click", async (event) => {
       renderView();
       return;
     }
+    if (button.id === "waitlist-refresh") {
+      renderWaitlist();
+      return;
+    }
     const action = button.dataset.action,
       id = Number(button.dataset.id);
     if (!action) return;
-    if (action === "delete-lead") {
+    if (action === "cancel-waitlist") {
+      if (!confirm("Remove this patient from the cancellation waitlist?")) return;
+      await post(`/api/waitlist/${id}/cancel`);
+      renderWaitlist();
+      toast("Waitlist entry removed");
+    } else if (action === "delete-lead") {
       if (!confirm("Delete this demo request and its contact details? This cannot be undone.")) return;
       await api(`/api/leads/${id}`, { method: "DELETE" });
       renderLeads();
@@ -458,6 +569,16 @@ document.addEventListener("click", async (event) => {
         renderThreadList();
         await renderMessages();
       }
+    } else if (action === "new-doctor") {
+      modal("Add doctor", doctorFormHtml());
+    } else if (action === "edit-doctor") {
+      const doctor = state.doctors.find((item) => item.id === id);
+      if (doctor) modal("Edit doctor schedule", doctorFormHtml(doctor));
+    } else if (action === "new-service") {
+      modal("Add service", serviceFormHtml());
+    } else if (action === "edit-service") {
+      const service = state.services.find((item) => item.id === id);
+      if (service) modal("Edit service", serviceFormHtml(service));
     } else if (action === "new-clinic")
       modal(
         "Add a clinic",
@@ -565,13 +686,51 @@ document.addEventListener("submit", async (event) => {
       if ($("#modal").open) $("#modal").close();
       await launch();
       toast("Clinic saved");
+    } else if (form.id === "growth-doctor-form") {
+      const id = Number(form.dataset.id);
+      await api(
+        id
+          ? `/api/doctors/${id}`
+          : `/api/clinics/${state.clinic.id}/doctors`,
+        {
+          method: id ? "PUT" : "POST",
+          body: JSON.stringify(readDoctorForm(form)),
+        },
+      );
+      $("#modal").close();
+      await renderGrowthCatalog();
+      toast("Doctor schedule saved");
+    } else if (form.id === "growth-service-form") {
+      const id = Number(form.dataset.id);
+      const data = {
+        ...Object.fromEntries(new FormData(form)),
+        duration: Number(new FormData(form).get("duration")),
+        fee: Number(new FormData(form).get("fee")),
+        active: new FormData(form).has("active"),
+      };
+      await api(
+        id
+          ? `/api/services/${id}`
+          : `/api/clinics/${state.clinic.id}/services`,
+        {
+          method: id ? "PUT" : "POST",
+          body: JSON.stringify(data),
+        },
+      );
+      $("#modal").close();
+      await renderGrowthCatalog();
+      toast("Service saved");
     } else if (form.id === "appointment-form") {
       const d = new FormData(form),
         id = Number(form.dataset.move);
       if (id)
         await api(`/api/appointments/${id}`, {
           method: "PATCH",
-          body: JSON.stringify({ scheduled_at: d.get("scheduled_at") }),
+          body: JSON.stringify({
+            scheduled_at: d.get("scheduled_at"),
+            doctor_id: Number(d.get("doctor_id")),
+            service_id: Number(d.get("service_id")),
+          }),
         });
       else
         await post("/api/appointments", {
@@ -580,6 +739,8 @@ document.addEventListener("submit", async (event) => {
           contact: d.get("contact"),
           scheduled_at: d.get("scheduled_at"),
           consent: d.has("consent"),
+          doctor_id: Number(d.get("doctor_id")),
+          service_id: Number(d.get("service_id")),
           request_key: crypto.randomUUID(),
         });
       $("#modal").close();
@@ -644,14 +805,8 @@ document.addEventListener("change", async (event) => {
       state.selectedThread = null;
       await load();
     }
-    if (event.target.id === "booking-day") {
-      const slots = await api(
-        `/api/availability?clinic_id=${state.clinic.id}&day=${encodeURIComponent(event.target.value)}`,
-      );
-      $("#slot-select").innerHTML = slots
-        .map((s) => `<option value="${esc(s.iso)}">${esc(s.label)}</option>`)
-        .join("");
-      if (!slots.length) toast("No slots available for this date");
+    if (["booking-day", "booking-doctor", "booking-service"].includes(event.target.id)) {
+      await refreshBookingSlots();
     }
     if (event.target.id === "appointment-filter") filterAppointments();
     if (event.target.matches("[data-lead-id]")) {
