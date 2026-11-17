@@ -23,6 +23,7 @@ const state = {
   threads: [],
   appts: [],
   jobs: [],
+  leads: [],
   report: {},
   status: {},
   selectedThread: null,
@@ -84,6 +85,7 @@ const titles = {
   delivery: "Message delivery",
   settings: "Clinic settings",
   demo: "Try the demo",
+  leads: "Sales enquiries",
 };
 async function launch() {
   state.clinics = await api("/api/clinics");
@@ -103,6 +105,7 @@ async function launch() {
       ? "CLINIC WORKSPACE"
       : "DEMO WORKSPACE · NO REAL DEMO SENDS";
   $("#demo-nav").hidden = state.user.mode === "production";
+  $("#leads-nav").hidden = state.user.role !== "admin";
   await load();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
@@ -158,6 +161,10 @@ function renderView() {
       b.classList.toggle("active", b.dataset.view === state.view),
     );
   $("#page-title").textContent = titles[state.view];
+  if (state.view === "leads" && state.user.role === "admin") {
+    renderLeads();
+    return;
+  }
   if (!state.clinic) {
     $("#content").innerHTML =
       `<div class="panel">${empty("Add your first clinic", "Create a clinic profile, approve its information, then connect WhatsApp.")}<button class="primary" data-action="new-clinic">Add clinic</button></div>`;
@@ -351,6 +358,22 @@ function renderSettings() {
       })
       .catch((e) => toast(e.message, true));
 }
+function renderLeads() {
+  $("#content").innerHTML = `<section class="panel"><div class="panel-heading"><div><h3>Website demo requests</h3><p>Keep sales follow-up in one place. Only administrator accounts can access these enquiries.</p></div></div><div id="leads-list">Loading enquiries…</div><p class="hint">Contact people only about their demo request. Delete records when no longer needed or when deletion is requested.</p></section>`;
+  api("/api/leads")
+    .then((leads) => {
+      state.leads = leads;
+      const target = $("#leads-list");
+      if (!target || state.view !== "leads") return;
+      if (!leads.length) {
+        target.innerHTML = empty("No demo requests yet", "Requests submitted on the public Jyutrix site will appear here.");
+        return;
+      }
+      target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Contact</th><th>Clinic</th><th>Request</th><th>Received</th><th>Stage</th><th></th></tr></thead><tbody>${leads.map((lead) => `<tr><td><strong>${esc(lead.name)}</strong><small><a href="tel:${esc(lead.phone)}">${esc(lead.phone)}</a>${lead.email ? `<br><a href="mailto:${esc(lead.email)}">${esc(lead.email)}</a>` : ""}</small></td><td>${esc(lead.clinic_name)}<small>${esc(lead.city)}</small></td><td>${esc(lead.note || "—")}</td><td>${esc(stamp(lead.created))}</td><td><select data-lead-id="${lead.id}" aria-label="Follow-up stage for ${esc(lead.name)}">${["new", "contacted", "qualified", "won", "closed"].map((stage) => `<option value="${stage}" ${stage === lead.status ? "selected" : ""}>${stage}</option>`).join("")}</select></td><td><button class="danger" data-action="delete-lead" data-id="${lead.id}">Delete</button></td></tr>`).join("")}</tbody></table></div>`;
+    })
+    .catch((error) => toast(error.message, true));
+}
+
 function renderDemo() {
   $("#content").innerHTML =
     `<section class="panel"><div class="panel-heading"><div><h3>Try a patient conversation</h3><p>Same booking engine, separate demo records. No WhatsApp messages are sent.</p></div>${pill("Demo only", "warn")}</div><form id="demo-form"><div class="form-grid"><label>Patient name<input name="name" value="Demo patient" required></label><label>Demo contact<input name="contact" value="919999000001" required></label></div><div class="demo-chat" id="demo-chat">Send BOOK → choose 1 → send YES. No booking is created until confirmation.</div><div class="demo-quick">${["Hello", "BOOK", "1", "YES", "FEES", "RESCHEDULE", "CANCEL", "STAFF", "STOP", "START"].map((t) => `<button type="button" class="secondary" data-action="demo-quick" data-text="${t}">${t}</button>`).join("")}</div><div class="form-actions"><input name="text" placeholder="Type a patient message…" required maxlength="4000" aria-label="Demo patient message"><button class="primary">Send</button></div></form><p class="hint">The prototype recognizes selected Telugu/Hindi phrases; replies currently use English. Full translated conversation quality requires separate acceptance testing.</p></section>`;
@@ -421,7 +444,12 @@ document.addEventListener("click", async (event) => {
     const action = button.dataset.action,
       id = Number(button.dataset.id);
     if (!action) return;
-    if (action === "open-thread") {
+    if (action === "delete-lead") {
+      if (!confirm("Delete this demo request and its contact details? This cannot be undone.")) return;
+      await api(`/api/leads/${id}`, { method: "DELETE" });
+      renderLeads();
+      toast("Enquiry deleted");
+    } else if (action === "open-thread") {
       state.selectedThread = id;
       if (state.view !== "inbox") {
         state.view = "inbox";
@@ -626,6 +654,13 @@ document.addEventListener("change", async (event) => {
       if (!slots.length) toast("No slots available for this date");
     }
     if (event.target.id === "appointment-filter") filterAppointments();
+    if (event.target.matches("[data-lead-id]")) {
+      await api(`/api/leads/${event.target.dataset.leadId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: event.target.value }),
+      });
+      toast("Enquiry stage updated");
+    }
   } catch (e) {
     toast(e.message, true);
   }

@@ -41,6 +41,7 @@
           send real messages.
         </p>
         <div id="login-error" role="alert"></div>
+        <p class="hint"><a href="/">← Back to Jyutrix</a></p>
       </div>
       <div class="login-art">
         <div class="eyebrow">SPACE TO FOCUS</div>
@@ -56,7 +57,7 @@
     </section>
     <div id="workspace" hidden>
       <aside>
-        <a class="brand" href="/">
+        <a class="brand" href="/app">
           <span class="brand-mark small">J</span
           ><span>jyutrix<small>CLINIC RECEPTION</small></span></a
         >
@@ -69,7 +70,10 @@
             ◌ <span>Conversations</span><b id="attention-count"></b></button
           ><button data-view="delivery">↗ <span>Message delivery</span></button
           ><button data-view="settings">⚙ <span>Clinic settings</span></button
-          ><button data-view="demo" id="demo-nav">
+          ><button data-view="leads" id="leads-nav" hidden>
+            ✉ <span>Sales enquiries</span>
+          </button>
+          <button data-view="demo" id="demo-nav">
             ▷ <span>Try the demo</span>
           </button>
         </nav>

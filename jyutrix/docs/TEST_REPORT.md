@@ -1,6 +1,14 @@
 # Release verification — 14 October 2026
 
-## Completed in this build
+## Website and enquiry workflow follow-up — 17 November 2026
+
+- Added the public marketing page at `/` and moved the clinic workspace to `/app`.
+- Added a public, consent-checked demo request form with IP rate limiting and a honeypot; enquiries are administrator-only, stage-tracked, deletable, and included in the configured retention task.
+- Fixed the production configuration so it rejects the public local-demo admin password.
+- Updated Hostinger KVM / `jyutrix.cloud` deployment instructions and canonical `www` redirect.
+- Local verification after these changes: **56 backend tests passed** on SQLite; DOM UI smoke passed; both frontend scripts passed `node --check`. Docker/PostgreSQL and real deployment remain unverified in this environment.
+
+## Completed in the original build
 
 - **53 automated backend tests passed** on a disposable SQLite database, Python 3.12.
 - **DOM integration smoke passed** against an actual disposable FastAPI HTTP server: 50 requests covering login, overview, slot choice/confirmation, settings save, injected HTML rendered as text, appointment list, inbox takeover, staff reply, delivery view and logout.

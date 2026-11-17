@@ -616,6 +616,15 @@ def test_production_config_fails_closed():
     with pytest.raises(RuntimeError):
         Settings(
             mode="production",
+            admin_password="demo-reception-2026",
+            public_url="https://clinic.example",
+            database_url="postgresql://x",
+            kapso_key="x",
+            webhook_secret="x" * 32,
+        ).validate()
+    with pytest.raises(RuntimeError):
+        Settings(
+            mode="production",
             admin_password="",
             public_url="https://clinic.example",
             database_url="postgresql://x",
@@ -631,6 +640,52 @@ def test_production_config_fails_closed():
             kapso_key="x",
             webhook_secret="x" * 32,
         ).validate()
+
+
+def test_public_marketing_and_workspace_routes(client):
+    landing = client.get("/")
+    workspace = client.get("/app")
+    assert landing.status_code == 200 and "Request a live demo" in landing.text
+    assert "/static/marketing.css" in landing.text
+    assert workspace.status_code == 200 and 'id="workspace"' in workspace.text
+
+
+def test_website_demo_request_is_admin_managed_and_deletable(client, admin):
+    payload = {
+        "name": "Asha Rao",
+        "clinic_name": "Lakeview Dental",
+        "city": "Hyderabad",
+        "phone": "+919876543210",
+        "email": "asha@example.com",
+        "note": "We need after-hours enquiry support.",
+        "consent": True,
+        "website": "",
+    }
+    with TestClient(app) as anonymous:
+        assert anonymous.get("/api/leads").status_code == 401
+    response = client.post("/api/leads", json=payload)
+    assert response.status_code == 201, response.text
+    lead = admin.get("/api/leads").json()[0]
+    assert lead["clinic_name"] == "Lakeview Dental"
+    assert lead["status"] == "new"
+    assert admin.patch(f"/api/leads/{lead['id']}", json={"status": "contacted"}).status_code == 200
+    assert admin.delete(f"/api/leads/{lead['id']}").status_code == 200
+    assert admin.get("/api/leads").json() == []
+
+
+def test_website_honeypot_and_consent_validation(client):
+    payload = {
+        "name": "Bot Submission",
+        "clinic_name": "Fake Clinic",
+        "city": "Hyderabad",
+        "phone": "+919876543210",
+        "consent": True,
+        "website": "https://spam.example",
+    }
+    assert client.post("/api/leads", json=payload).status_code == 201
+    payload["website"] = ""
+    payload["consent"] = False
+    assert client.post("/api/leads", json=payload).status_code == 422
 
 
 def test_crashed_dispatch_is_quarantined(admin, clinic, monkeypatch):
